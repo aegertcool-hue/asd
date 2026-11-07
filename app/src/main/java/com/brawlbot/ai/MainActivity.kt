@@ -25,7 +25,6 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.sin
 
-// 1. ЧТЕНИЕ И САМООБУЧЕНИЕ ФАЙЛА ПАМЯТИ asd_memory.json
 object AsdBrainMemory {
     private const val FILE_NAME = "asd_memory.json"
 
@@ -65,7 +64,6 @@ object AsdBrainMemory {
     }
 }
 
-// 2. РУКИ БОТА: УПРАВЛЕНИЕ ДЖОЙСТИКАМИ И КНОПКАМИ (AccessibilityService)
 class BotControlService : AccessibilityService() {
     companion object {
         var instance: BotControlService? = null
@@ -100,7 +98,6 @@ class BotControlService : AccessibilityService() {
     }
 }
 
-// 3. ГЛАВНОЕ МЕНЮ ПРИЛОЖЕНИЯ
 class MainActivity : Activity() {
     private val REQ_CAPTURE = 1001
 
@@ -174,7 +171,6 @@ class MainActivity : Activity() {
     }
 }
 
-// 4. СЕРВИС ЗРЕНИЯ, МЫСЛЕЙ И АВТО-УПРАВЛЕНИЯ
 class OverlayService : Service() {
     private lateinit var wm: WindowManager
     private lateinit var hudView: BotHudView
@@ -191,7 +187,6 @@ class OverlayService : Service() {
     private var autoPlayEnabled = false
     private var showButtonsOverlay = true
 
-    // Переменные для анти-застревания (3 удара + обход)
     private var lastEnemyDist = 0f
     private var stuckCounter = 0
     private var walkAngle = 0.0
@@ -391,19 +386,14 @@ class OverlayService : Service() {
             val meCluster = cluster(rawMe, 160f)
             val myPos = if (meCluster.isNotEmpty()) meCluster[0] else PointF(screenW / 2f, screenH / 2f)
 
-            // МЫСЛИ И РЕШЕНИЯ БОТА (по базе asd_memory.json)
             val nearestEnemy = enemies.minByOrNull { hypot(it.x - myPos.x, it.y - myPos.y) }
             val dist = nearestEnemy?.let { hypot(it.x - myPos.x, it.y - myPos.y) } ?: 9999f
 
-            val thought: String
-            if (nearestEnemy == null) {
-                thought = "Мысль: Чисто. Проверяю кусты ? (50/50), Гиперзаряд бережем!"
-            } else if (dist < 185f) {
-                thought = "КРАЙНИЙ СЛУЧАЙ (${dist.toInt()}px)! ГИПЕРЗАРЯД + УЛЬТА + АВТОАТАКА!"
-            } else if (dist < 310f) {
-                thought = "ОПАСНОСТЬ (${dist.toInt()}px): Враг в зоне Ульты! Держу дистанцию / Гаджет!"
-            } else {
-                thought = "Вижу врага (${dist.toInt()}px): Автоатака запрещена (далеко), мансую!"
+            val thought = when {
+                nearestEnemy == null -> "Мысль: Чисто. Проверяю кусты ? (50/50), Гипер бережем!"
+                dist < 185f -> "КРАЙНИЙ СЛУЧАЙ (${dist.toInt()}px)! ГИПЕР + УЛЬТА + АВТОАТАКА!"
+                dist < 310f -> "ОПАСНОСТЬ (${dist.toInt()}px): Враг в зоне Ульты! Держу дистанцию!"
+                else -> "Вижу врага (${dist.toInt()}px): Автоатака запрещена (далеко), мансую!"
             }
 
             statusText.text = "Врагов: ${enemies.size}"
@@ -411,7 +401,6 @@ class OverlayService : Service() {
 
             if (enemies.isNotEmpty()) AsdBrainMemory.updateLearning(this, enemies.size, false)
 
-            // ЕСЛИ ВКЛЮЧЕН АВТО-БОТ И РАЗРЕШЕНЫ СПЕЦ. ВОЗМОЖНОСТИ
             val hands = BotControlService.instance
             if (autoPlayEnabled && hands != null) {
                 val moveX = screenW * 0.16f
@@ -423,34 +412,25 @@ class OverlayService : Service() {
                 val hyperX = screenW * 0.61f
                 val hyperY = screenH * 0.82f
 
-                // Проверка на застревание в стене/ящике
-                if (kotlin.math.abs(dist - lastEnemyDist) < 6f) {
-                    stuckCounter++
-                } else {
-                    stuckCounter = 0
-                }
+                if (kotlin.math.abs(dist - lastEnemyDist) < 6f) stuckCounter++ else stuckCounter = 0
                 lastEnemyDist = dist
 
                 if (stuckCounter >= 4) {
-                    // Застрял -> 3 удара автоатакой и поворот обхода!
-                    hudView.updateState(myPos, enemies, "ЗАСТРЯЛ В СТЕНЕ! Делаю 3 удара и обхожу!")
+                    hudView.updateState(myPos, enemies, "ЗАСТРЯЛ! Делаю 3 удара и обхожу стену!")
                     hands.tapButton(atkX, atkY, 50L)
-                    walkAngle += 1.57 // Поворот на 90 градусов
+                    walkAngle += 1.57
                     stuckCounter = 0
                     AsdBrainMemory.updateLearning(this, 0, true)
                 } else if (nearestEnemy != null && dist < 185f) {
-                    // Крайний случай: жмем Гиперзаряд -> Ульту -> Автоатаку!
                     hands.tapButton(hyperX, hyperY, 45L)
                     hands.tapButton(superX, superY, 45L)
                     hands.tapButton(atkX, atkY, 50L)
                 } else if (nearestEnemy != null && dist < 290f) {
-                    // Отступаем от врага
                     val dx = myPos.x - nearestEnemy.x
                     val dy = myPos.y - nearestEnemy.y
                     val len = hypot(dx, dy).coerceAtLeast(1f)
                     hands.holdJoystick(moveX, moveY, moveX + (dx / len) * 110f, moveY + (dy / len) * 110f, 170L)
                 } else {
-                    // Обычное движение по вектору
                     val tx = moveX + (cos(walkAngle) * 110f).toFloat()
                     val ty = moveY + (sin(walkAngle) * 110f).toFloat()
                     hands.holdJoystick(moveX, moveY, tx, ty, 170L)
@@ -483,7 +463,6 @@ class OverlayService : Service() {
     }
 }
 
-// 5. ХУДОЖНИК: РИСУЕТ НАС (ЗЕЛЕНЫМ), ВРАГОВ (ГОЛУБЫМ), КНОПКИ И МЫСЛИ
 class BotHudView(context: Context) : View(context) {
     private var myPos = PointF(0f, 0f)
     private var enemies = listOf<PointF>()
@@ -510,8 +489,32 @@ class BotHudView(context: Context) : View(context) {
         val meX = if (myPos.x > 0f) myPos.x else w / 2f
         val meY = if (myPos.y > 0f) myPos.y else h / 2f
 
-        // 1. СТРОКА МЫСЛЕЙ МОДЕЛИ СВЕРХУ
         paint.style = Paint.Style.FILL
         paint.color = Color.argb(170, 0, 0, 0)
         canvas.drawRoundRect(w * 0.22f, 20f, w * 0.88f, 75f, 14f, 14f, paint)
-      
+        textPaint.color = Color.YELLOW
+        canvas.drawText(currentThought, w * 0.24f, 56f, textPaint)
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 5f
+        paint.color = Color.GREEN
+        canvas.drawRect(meX - 50f, meY - 50f, meX + 50f, meY + 50f, paint)
+        canvas.drawCircle(meX, meY, 175f, paint)
+        textPaint.color = Color.GREEN
+        canvas.drawText("Я (ASD)", meX - 45f, meY - 60f, textPaint)
+
+        for ((i, en) in enemies.withIndex()) {
+            paint.style = Paint.Style.FILL
+            paint.color = Color.argb(55, 0, 220, 255)
+            canvas.drawRect(en.x - 55f, en.y - 55f, en.x + 55f, en.y + 55f, paint)
+
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 5f
+            paint.color = Color.CYAN
+            canvas.drawRect(en.x - 55f, en.y - 55f, en.x + 55f, en.y + 55f, paint)
+            canvas.drawCircle(en.x, en.y, 220f, paint)
+
+            paint.color = Color.argb(200, 255, 50, 50)
+            canvas.drawCircle(en.x, en.y, 310f, paint)
+
+            v
