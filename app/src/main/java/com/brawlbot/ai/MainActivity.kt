@@ -212,7 +212,7 @@ class BotHudView(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
-        textSize = 30f
+        textSize = 28f
         typeface = Typeface.DEFAULT_BOLD
     }
 
@@ -237,3 +237,73 @@ class BotHudView(context: Context) : View(context) {
                 bush.isCheckedPurple = false
             }
         }
+
+        enemy.x += enemy.vx
+        enemy.y += enemy.vy
+
+        if (enemy.x < 200f || enemy.x > 1100f) enemy.vx = -enemy.vx
+        if (enemy.y < 200f || enemy.y > 700f) enemy.vy = -enemy.vy
+
+        enemy.isHiddenInBush = bushes.any { it.rect.contains(enemy.x, enemy.y) }
+        for (bush in bushes) {
+            if (bush.rect.contains(enemy.x, enemy.y)) {
+                bush.isCheckedPurple = false
+            }
+        }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val centerX = width / 2f
+        val centerY = height / 2f
+
+        for (bush in bushes) {
+            paint.style = Paint.Style.FILL
+            if (bush.isCheckedPurple) {
+                paint.color = Color.argb(95, 170, 0, 255)
+                canvas.drawRect(bush.rect, paint)
+                canvas.drawText("БЕЗОПАСНО (0%)", bush.rect.left + 20f, bush.rect.centerY(), textPaint)
+            } else {
+                paint.color = Color.argb(80, 255, 200, 0)
+                canvas.drawRect(bush.rect, paint)
+                canvas.drawText("КУСТ ? (50/50)", bush.rect.left + 20f, bush.rect.centerY(), textPaint)
+            }
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 4f
+            paint.color = if (bush.isCheckedPurple) Color.MAGENTA else Color.YELLOW
+            canvas.drawRect(bush.rect, paint)
+        }
+
+        val myStats = BrawlerDatabase.brawlers["Кит (Kit)"]!!
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 5f
+        paint.color = Color.GREEN
+        canvas.drawRect(centerX - 40f, centerY - 40f, centerX + 40f, centerY + 40f, paint)
+
+        paint.strokeWidth = 2f
+        paint.color = Color.argb(140, 0, 255, 100)
+        canvas.drawCircle(centerX, centerY, myStats.attackRadius, paint)
+
+        val effectiveSuperRadius = enemy.brawler.superRadius * enemy.brawler.dangerMemory
+
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(45, 255, 0, 0)
+        canvas.drawCircle(enemy.x, enemy.y, effectiveSuperRadius, paint)
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 4f
+        paint.color = Color.RED
+        canvas.drawCircle(enemy.x, enemy.y, effectiveSuperRadius, paint)
+
+        paint.strokeWidth = 3f
+        paint.color = if (enemy.isHiddenInBush) Color.CYAN else Color.YELLOW
+        canvas.drawCircle(enemy.x, enemy.y, enemy.brawler.attackRadius, paint)
+
+        val statusText = if (enemy.isHiddenInBush) {
+            "В КУСТАХ (Предсказание!): ${enemy.brawler.name}"
+        } else {
+            "Враг: ${enemy.brawler.name}"
+        }
+        canvas.drawText(statusText, enemy.x - 100f, enemy.y - 20f, textPaint)
+    }
+}
