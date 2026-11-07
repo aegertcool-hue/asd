@@ -4,17 +4,18 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.view.accessibility.AccessibilityEvent
+import kotlin.math.abs
 
 class BotControlService : AccessibilityService() {
     companion object {
         var instance: BotControlService? = null
     }
 
-    // Хранит зажатый палец на джойстике ходьбы (чтобы водить его НЕ отрывая!)
-    private var activeWalkStroke: GestureDescription.StrokeDescription? = null
-    private var lastFingerX = 0f
-    private var lastFingerY = 0f
-    private var isPerformingAim = false
+    private var walkStroke: GestureDescription.StrokeDescription? = null
+    private var lastWalkX = 0f
+    private var lastWalkY = 0f
+    var isBusyAiming = false
+        private set
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -23,130 +24,138 @@ class BotControlService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {
-        activeWalkStroke = null
+        walkStroke = null
+        isBusyAiming = false
     }
 
     override fun onDestroy() {
-        activeWalkStroke = null
+        walkStroke = null
         instance = null
         super.onDestroy()
     }
 
-    // 1. НЕПРЕРЫВНОЕ ЗАЖАТИЕ И ВЕДЕНИЕ ДЖОЙСТИКА ХОДЬБЫ (палец НЕ отрывается от экрана!)
-    fun holdAndDragWalkJoystick(centerX: Float, centerY: Float, dirX: Float, dirY: Float) {
-        if (isPerformingAim) return
+    // 1. ДЖОЙСТИК ХОДЬБЫ: Зажимает и плавно водит палец БЕЗ отрыва от экрана!
+    fun holdAndSteerWalk(joyX: Float, joyY: Float, dirX: Float, dirY: Float) {
+        if (isBusyAiming) return
 
-        val pullRadius = 135f
-        val targetX = (centerX + dirX * pullRadius).coerceIn(50f, centerX + 180f)
-        val targetY = (centerY + dirY * pullRadius).coerceIn(centerY - 180f, centerY + 180f)
+        val radius = 135f
+        val tx = (joyX + dirX * radius).coerceIn(40f, joyX + 175f)
+        val ty = (joyY + dirY * radius).coerceIn(joyY - 175f, joyY + 175f)
 
         try {
-            val currentStroke = activeWalkStroke
-            if (currentStroke == null) {
-                // Первый шаг: ставим палец в центр джойстика, тянем в сторону и ОСТАВЛЯЕМ ЗАЖАТЫМ (willContinue = true)
-                val path = Path().apply {
-                    moveTo(centerX, centerY)
-                    lineTo(targetX, targetY)
+            val cur = walkStroke
+            if (cur == null) {
+                val p = Path().apply {
+                    moveTo(joyX, joyY)
+                    lineTo(tx, ty)
                 }
-                val newStroke = GestureDescription.StrokeDescription(path, 0L, 240L, true)
-                val gesture = GestureDescription.Builder().addStroke(newStroke).build()
-
-                dispatchGesture(gesture, object : GestureResultCallback() {
-                    override fun onCompleted(gestureDescription: GestureDescription?) {
-                        activeWalkStroke = newStroke
-                        lastFingerX = targetX
-                        lastFingerY = targetY
+                val s = GestureDescription.StrokeDescription(p, 0L, 250L, true)
+                dispatchGesture(GestureDescription.Builder().addStroke(s).build(), object : GestureResultCallback() {
+                    override fun onCompleted(g: GestureDescription?) {
+                        walkStroke = s
+                        lastWalkX = tx
+                        lastWalkY = ty
                     }
-                    override fun onCancelled(gestureDescription: GestureDescription?) {
-                        activeWalkStroke = null
+                    override fun onCancelled(g: GestureDescription?) {
+                        walkStroke = null
                     }
                 }, null)
             } else {
-                // Продолжение: палец УЖЕ зажат! Просто плавно ведем его из старой точки в новую точку без отрыва!
-                val path = Path().apply {
-                    moveTo(lastFingerX, lastFingerY)
-                    lineTo(targetX, targetY)
+                val nx = if (abs(tx - lastWalkX) < 2f) tx + 2f else tx
+                val ny = if (abs(ty - lastWalkY) < 2f) ty + 2f else ty
+                val p = Path().apply {
+                    moveTo(lastWalkX, lastWalkY)
+                    lineTo(nx, ny)
                 }
-                // Если точка почти не изменилась, делаем микро-движение на 2 пикселя, чтобы Android держал палец
-                if (kotlin.math.abs(targetX - lastFingerX) < 2f && kotlin.math.abs(targetY - lastFingerY) < 2f) {
-                    path.lineTo(targetX + 2f, targetY + 2f)
-                }
-                val continuedStroke = currentStroke.continueStroke(path, 0L, 240L, true)
-                val gesture = GestureDescription.Builder().addStroke(continuedStroke).build()
-
-                dispatchGesture(gesture, object : GestureResultCallback() {
-                    override fun onCompleted(gestureDescription: GestureDescription?) {
-                        activeWalkStroke = continuedStroke
-                        lastFingerX = targetX
-                        lastFingerY = targetY
+                val nextS = cur.continueStroke(p, 0L, 250L, true)
+                dispatchGesture(GestureDescription.Builder().addStroke(nextS).build(), object : GestureResultCallback() {
+                    override fun onCompleted(g: GestureDescription?) {
+                        walkStroke = nextS
+                        lastWalkX = nx
+                        lastWalkY = ny
                     }
-                    override fun onCancelled(gestureDescription: GestureDescription?) {
-                        activeWalkStroke = null
+                    override fun onCancelled(g: GestureDescription?) {
+                        walkStroke = null
                     }
                 }, null)
             }
         } catch (_: Exception) {
-            activeWalkStroke = null
+            walkStroke = null
         }
     }
 
-    // 2. ПРИЦЕЛЬНЫЙ ВЫСТРЕЛ ОБЫЧНОЙ АТАКОЙ ИЛИ УЛЬТОЙ (зажимает и тянет прицел по вектору!)
-    fun aimAndReleaseJoystick(joyX: Float, joyY: Float, dirX: Float, dirY: Float, pullDist: Float = 140f) {
-        isPerformingAim = true
-        activeWalkStroke = null // Освобождаем для точного прицельного свайпа
+    // 2. УМНОЕ ПРИЦЕЛИВАНИЕ (Атакой или Ультой) С ВОЗМОЖНОСТЬЮ ОТМЕНЫ!
+    // Если shouldCancel == true (враг за стеной или вышел из ренджа), бот возвращает палец обратно в центр джойстика и ОТМЕНЯЕТ выстрел!
+    fun aimOrCancelJoystick(
+        joyX: Float,
+        joyY: Float,
+        dirX: Float,
+        dirY: Float,
+        shouldCancel: Boolean
+    ) {
+        isBusyAiming = true
+        walkStroke = null
 
-        val aimEndX = joyX + dirX * pullDist
-        val aimEndY = joyY + dirY * pullDist
+        val pullX = joyX + dirX * 140f
+        val pullY = joyY + dirY * 140f
 
         val path = Path().apply {
             moveTo(joyX, joyY)
-            lineTo(aimEndX, aimEndY)
-        }
-        // willContinue = false: зажал центр -> вытянул прицел на врага за 145 мс -> отпустил для выстрела!
-        val aimStroke = GestureDescription.StrokeDescription(path, 0L, 145L, false)
-        dispatchGesture(GestureDescription.Builder().addStroke(aimStroke).build(), object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) {
-                isPerformingAim = false
+            // Сначала вытягиваем прицел в сторону врага (чтобы навестись и замерить радиус!)
+            lineTo(pullX, pullY)
+            if (shouldCancel) {
+                // ОТМЕНА УЛЬТЫ / АТАКИ: уводим палец обратно в самый центр джойстика перед отпусканием!
+                lineTo(joyX, joyY)
             }
-            override fun onCancelled(gestureDescription: GestureDescription?) {
-                isPerformingAim = false
+        }
+
+        val duration = if (shouldCancel) 280L else 170L
+        val stroke = GestureDescription.StrokeDescription(path, 0L, duration, false)
+        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), object : GestureResultCallback() {
+            override fun onCompleted(g: GestureDescription?) {
+                isBusyAiming = false
+            }
+            override fun onCancelled(g: GestureDescription?) {
+                isBusyAiming = false
             }
         }, null)
     }
 
-    // 3. ПРИЦЕЛЬНОЕ ИСПОЛЬЗОВАНИЕ ГАДЖЕТА (активация гаджета + вытягивание прицела на врага!)
-    fun useAndAimGadget(gadgetX: Float, gadgetY: Float, atkJoyX: Float, atkJoyY: Float, dirX: Float, dirY: Float, aimed: Boolean) {
-        isPerformingAim = true
-        activeWalkStroke = null
+    // 3. НАЖАТИЕ И ПРИЦЕЛИВАНИЕ ГАДЖЕТОМ (включает гаджет и наводит прицел на врага!)
+    fun activateAndAimGadget(
+        gadX: Float,
+        gadY: Float,
+        atkX: Float,
+        atkY: Float,
+        dirX: Float,
+        dirY: Float,
+        shouldCancel: Boolean
+    ) {
+        isBusyAiming = true
+        walkStroke = null
 
-        val tapPath = Path().apply {
-            moveTo(gadgetX, gadgetY)
-            if (aimed) {
-                lineTo(gadgetX + dirX * 95f, gadgetY + dirY * 95f)
-            }
+        val gadPath = Path().apply {
+            moveTo(gadX, gadY)
+            lineTo(gadX + dirX * 70f, gadY + dirY * 70f)
         }
-        val gadgetStroke = GestureDescription.StrokeDescription(tapPath, 0L, 90L, false)
-        dispatchGesture(GestureDescription.Builder().addStroke(gadgetStroke).build(), object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) {
-                if (aimed) {
-                    // Сразу после активации гаджета целимся свайпом в точку упреждения врага!
-                    aimAndReleaseJoystick(atkJoyX, atkJoyY, dirX, dirY, 145f)
-                } else {
-                    isPerformingAim = false
-                }
+        val s = GestureDescription.StrokeDescription(gadPath, 0L, 90L, false)
+        dispatchGesture(GestureDescription.Builder().addStroke(s).build(), object : GestureResultCallback() {
+            override fun onCompleted(g: GestureDescription?) {
+                AsdBrain.isGadgetActive = true
+                // Сразу наводимся атакой с усиленным радиусом гаджета (или отменяем, если враг спрятался)
+                aimOrCancelJoystick(atkX, atkY, dirX, dirY, shouldCancel)
             }
-            override fun onCancelled(gestureDescription: GestureDescription?) {
-                isPerformingAim = false
+            override fun onCancelled(g: GestureDescription?) {
+                isBusyAiming = false
             }
         }, null)
     }
 
-    // 4. БЫСТРОЕ НАЖАТИЕ КНОПКИ (для Гиперзаряда в крайнем случае)
-    fun quickTap(x: Float, y: Float) {
-        activeWalkStroke = null
-        val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0L, 60L, false)
-        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+    fun tapButton(x: Float, y: Float) {
+        walkStroke = null
+        val p = Path().apply { moveTo(x, y) }
+        val s = GestureDescription.StrokeDescription(p, 0L, 60L, false)
+        dispatchGesture(GestureDescription.Builder().addStroke(s).build(), null, null)
     }
 }
 // КОНЕЦ ЧАСТИ 2
