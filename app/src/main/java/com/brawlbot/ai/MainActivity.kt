@@ -7,16 +7,17 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.*
 import android.provider.Settings
-import android.view.View
+import android.view.*
 import android.widget.*
 
 class MainActivity : Activity() {
     override fun onCreate(s: Bundle?) {
         super.onCreate(s)
-        val lay = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(36, 48, 36, 36) }
-        lay.addView(TextView(this).apply { text = "asd AI v4.0 — Наведение, Хил и Отмена Ульты"; textSize = 18f; setTextColor(Color.CYAN) })
+        val lay = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(36, 48, 36, 36); setBackgroundColor(Color.parseColor("#121212")) }
+        lay.addView(TextView(this).apply { text = "asd AI v4.1 — Калибровка 360°"; textSize = 20f; setTextColor(Color.CYAN) })
+        
         lay.addView(Button(this).apply {
-            text = "1. ЗАПУСТИТЬ ASD (УМНЫЙ ПРИЦЕЛ И ХОДЬБА)"
+            text = "1. ЗАПУСТИТЬ ЗРЕНИЕ И ПАМЯТЬ"
             setOnClickListener {
                 if (!Settings.canDrawOverlays(context)) {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
@@ -26,15 +27,19 @@ class MainActivity : Activity() {
                 }
             }
         })
+
         lay.addView(Button(this).apply {
             text = "2. ВКЛЮЧИТЬ РУКИ (СПЕЦ. ВОЗМОЖНОСТИ)"
             setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         })
+
+        val mem = AsdBrain.loadJson(this)
         lay.addView(TextView(this).apply {
-            text = AsdBrain.loadJson(context).toString(2)
-            textSize = 11f; setTextColor(Color.LTGRAY); typeface = Typeface.MONOSPACE
+            text = "База asd:\n${mem.toString(2)}"
+            textSize = 12f; setTextColor(Color.LTGRAY); typeface = Typeface.MONOSPACE
         })
-        setContentView(ScrollView(this).apply { setBackgroundColor(Color.parseColor("#121212")); addView(lay) })
+
+        setContentView(ScrollView(this).apply { addView(lay) })
     }
 
     override fun onActivityResult(req: Int, res: Int, data: Intent?) {
@@ -49,9 +54,8 @@ class MainActivity : Activity() {
 class BotHudView(ctx: Context) : View(ctx) {
     private var me = PointF(0f, 0f)
     private var enemy: EnemyInfo? = null
-    private var bushes = listOf<PointF>()
-    private var walls = listOf<PointF>()
-    private var thought = "asd v4.0: Готов"
+    private var bushes = listOf<PointF>(); private var walls = listOf<PointF>()
+    private var thought = "asd: Ждет запуска..."
     var showZones = true
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -65,56 +69,56 @@ class BotHudView(ctx: Context) : View(ctx) {
         val w = width.toFloat(); val h = height.toFloat()
         val mx = if (me.x > 0f) me.x else w / 2f; val my = if (me.y > 0f) me.y else h / 2f
 
+        // Окно мыслей
         p.style = Paint.Style.FILL; p.color = Color.argb(180, 0, 0, 0)
-        c.drawRoundRect(w * 0.20f, 16f, w * 0.94f, 70f, 14f, 14f, p)
-        tp.color = if (AsdBrain.needHealing) Color.RED else Color.YELLOW
-        c.drawText(thought, w * 0.22f, 52f, tp)
+        c.drawRoundRect(w * 0.2f, 15f, w * 0.95f, 70f, 14f, 14f, p)
+        tp.color = Color.YELLOW; c.drawText(thought, w * 0.22f, 50f, tp)
 
-        // 1. КУСТЫ и СТЕНЫ
-        p.style = Paint.Style.STROKE; p.strokeWidth = 3f
+        // Стены и Препятствия (Обводим ярко)
+        p.style = Paint.Style.STROKE; p.strokeWidth = 5f
+        for (wl in walls) {
+            p.color = Color.rgb(255, 100, 0)
+            c.drawRect(wl.x - 60f, wl.y - 60f, wl.x + 60f, wl.y + 60f, p)
+            tp.color = Color.rgb(255, 100, 0); c.drawText("БЛОК", wl.x - 30f, wl.y, tp)
+        }
+        // Кусты
         for (b in bushes) {
             p.color = Color.MAGENTA; c.drawRect(b.x - 50f, b.y - 50f, b.x + 50f, b.y + 50f, p)
-            tp.color = Color.MAGENTA; c.drawText("КУСТ", b.x - 30f, b.y, tp)
-        }
-        for (wl in walls) {
-            p.color = Color.rgb(255, 140, 0); c.drawRect(wl.x - 45f, wl.y - 45f, wl.x + 45f, wl.y + 45f, p)
-            tp.color = Color.rgb(255, 140, 0); c.drawText("СТЕНА", wl.x - 35f, wl.y, tp)
+            tp.color = Color.MAGENTA; c.drawText("КУСТ ?", b.x - 35f, b.y, tp)
         }
 
-        // 2. ЗЕЛЕНЫЙ КУБИК (ходит за персонажем!) + САМОРЕДАКТИРУЕМЫЙ КРУГ РАДИУСА АТАКИ
-        p.strokeWidth = 5f; p.color = if (AsdBrain.needHealing) Color.YELLOW else Color.GREEN
-        c.drawRect(mx - 48f, my - 48f, mx + 48f, my + 48f, p)
+        // Я (Зеленый кубик)
+        p.color = Color.GREEN; c.drawRect(mx - 50f, my - 50f, mx + 50f, my + 50f, p)
         p.strokeWidth = 3f; c.drawCircle(mx, my, AsdBrain.myDynamicAtkRadius, p)
-        tp.color = Color.GREEN
-        c.drawText("Я (ХП:${AsdBrain.myHpPercent}% | Рендж:${AsdBrain.myDynamicAtkRadius.toInt()})", mx - 120f, my - 58f, tp)
+        tp.color = Color.GREEN; c.drawText("Я (ASD)", mx - 50f, my - 65f, tp)
 
-        // 3. ПРОТИВНИК, ЕГО ТИП, ЛИНИЯ ПРИЦЕЛА И ПРОВЕРКА НА СТЕНУ
+        // Враг (Голубой с лазером)
         enemy?.let { en ->
-            p.style = Paint.Style.STROKE; p.strokeWidth = 5f; p.color = Color.CYAN
-            c.drawRect(en.x - 55f, en.y - 55f, en.x + 55f, en.y + 55f, p)
+            p.style = Paint.Style.STROKE; p.strokeWidth = 6f; p.color = Color.CYAN
+            c.drawRect(en.x - 60f, en.y - 60f, en.x + 60f, en.y + 60f, p)
             c.drawCircle(en.x, en.y, en.enemyAtkRadius, p)
             p.color = Color.RED; c.drawCircle(en.x, en.y, en.enemySupRadius, p)
-
-            // Лазерная линия прицела (Зеленая = можно бить, Красная = за стеной, отмена ульты!)
+            
+            // Лазер прицеливания
             p.color = if (en.isBehindWall) Color.RED else Color.GREEN
             c.drawLine(mx, my, en.aimX, en.aimY, p)
-            c.drawCircle(en.aimX, en.aimY, 16f, p)
+            c.drawCircle(en.aimX, en.aimY, 15f, p)
 
-            tp.color = Color.CYAN
-            c.drawText("${en.enemyClass} (${en.dist.toInt()}px)", en.x - 110f, en.y - 65f, tp)
+            tp.color = Color.CYAN; c.drawText("${en.enemyClass} (${en.dist.toInt()}px)", en.x - 100f, en.y - 70f, tp)
         }
 
         if (showZones) {
-            zone(c, w * 0.16f, h * 0.74f, 88f, Color.GREEN, "ХОДЬБА (ЗАЖАТИЕ)")
-            zone(c, w * 0.83f, h * 0.70f, 82f, Color.RED, "ПРИЦЕЛ АТАКИ")
-            zone(c, w * 0.70f, h * 0.64f, 50f, Color.YELLOW, "УЛЬТА (ОТМЕНА В ЦЕНТР)")
-            zone(c, w * 0.76f, h * 0.87f, 42f, Color.GREEN, "ГАДЖЕТ (ПРИЦЕЛ)")
+            zone(c, w * 0.16f, h * 0.74f, 90f, Color.GREEN, "ХОДЬБА")
+            zone(c, w * 0.83f, h * 0.70f, 85f, Color.RED, "АТАКА")
+            zone(c, w * 0.70f, h * 0.64f, 55f, Color.YELLOW, "УЛЬТА")
+            zone(c, w * 0.76f, h * 0.87f, 45f, Color.GREEN, "ГАДЖЕТ")
+            zone(c, w * 0.61f, h * 0.82f, 48f, Color.MAGENTA, "ГИПЕР")
         }
     }
 
     private fun zone(c: Canvas, x: Float, y: Float, r: Float, col: Int, txt: String) {
         p.style = Paint.Style.STROKE; p.strokeWidth = 3f; p.color = col
-        c.drawCircle(x, y, r, p); tp.color = col; c.drawText(txt, x - r, y - r - 8f, tp)
+        c.drawCircle(x, y, r, p); tp.color = col; c.drawText(txt, x - r, y - r - 10f, tp)
     }
 }
 // КОНЕЦ ЧАСТИ 4
