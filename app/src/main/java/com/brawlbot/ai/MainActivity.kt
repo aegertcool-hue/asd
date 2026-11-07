@@ -3,15 +3,13 @@ package com.brawlbot.ai
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.app.*
-import android.content.Context
-import android.content.Intent
+import android.content.*
 import android.content.pm.ServiceInfo
 import android.graphics.*
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
-import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
+import android.media.projection.*
 import android.net.Uri
 import android.os.*
 import android.provider.Settings
@@ -21,151 +19,68 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.*
 import org.json.JSONObject
 import java.io.File
-import kotlin.math.cos
-import kotlin.math.hypot
-import kotlin.math.sin
+import kotlin.math.*
 
-object AsdBrainMemory {
-    private const val FILE_NAME = "asd_memory.json"
-
-    fun load(context: Context): JSONObject {
-        val file = File(context.filesDir, FILE_NAME)
-        if (!file.exists()) {
-            return try {
-                val assetText = context.assets.open(FILE_NAME).bufferedReader().use { it.readText() }
-                file.writeText(assetText)
-                JSONObject(assetText)
-            } catch (e: Exception) {
-                JSONObject().put("bot_name", "asd AI")
-            }
+object AsdMemory {
+    fun load(ctx: Context): JSONObject {
+        val f = File(ctx.filesDir, "asd_memory.json")
+        if (!f.exists()) {
+            val txt = runCatching { ctx.assets.open("asd_memory.json").bufferedReader().readText() }.getOrDefault("{}")
+            f.writeText(txt)
         }
-        return try {
-            JSONObject(file.readText())
-        } catch (e: Exception) {
-            file.delete()
-            load(context)
-        }
-    }
-
-    fun updateLearning(context: Context, spotted: Int, wallBypassed: Boolean) {
-        try {
-            val file = File(context.filesDir, FILE_NAME)
-            val root = load(context)
-            val stats = root.optJSONObject("self_learning_stats") ?: JSONObject()
-            if (spotted > 0) {
-                stats.put("enemies_spotted", stats.optInt("enemies_spotted", 0) + spotted)
-            }
-            if (wallBypassed) {
-                stats.put("walls_bypassed", stats.optInt("walls_bypassed", 0) + 1)
-            }
-            root.put("self_learning_stats", stats)
-            file.writeText(root.toString(2))
-        } catch (_: Exception) {}
+        return runCatching { JSONObject(f.readText()) }.getOrDefault(JSONObject())
     }
 }
 
 class BotControlService : AccessibilityService() {
-    companion object {
-        var instance: BotControlService? = null
-    }
-
-    override fun onServiceConnected() {
-        super.onServiceConnected()
-        instance = this
-    }
-
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    companion object { var instance: BotControlService? = null }
+    override fun onServiceConnected() { instance = this }
+    override fun onAccessibilityEvent(e: AccessibilityEvent?) {}
     override fun onInterrupt() {}
+    override fun onDestroy() { instance = null; super.onDestroy() }
 
-    override fun onDestroy() {
-        instance = null
-        super.onDestroy()
+    fun tap(x: Float, y: Float) {
+        val p = Path().apply { moveTo(x, y) }
+        dispatchGesture(GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(p, 0L, 55L)).build(), null, null)
     }
 
-    fun tapButton(x: Float, y: Float, durationMs: Long = 55L) {
-        val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
-        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
-    }
-
-    fun holdJoystick(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long = 300L) {
-        val path = Path().apply {
-            moveTo(startX, startY)
-            lineTo(endX, endY)
-        }
-        val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
-        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+    fun move(x1: Float, y1: Float, x2: Float, y2: Float) {
+        val p = Path().apply { moveTo(x1, y1); lineTo(x2, y2) }
+        dispatchGesture(GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(p, 0L, 180L)).build(), null, null)
     }
 }
 
 class MainActivity : Activity() {
-    private val REQ_CAPTURE = 1001
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        val scroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#121212")) }
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(40, 50, 40, 40)
-        }
-
-        val title = TextView(this).apply {
-            text = "asd AI v3.0 — Зрение + Память + Руки"
-            textSize = 20f
-            setTextColor(Color.CYAN)
-        }
-        layout.addView(title)
-
-        val startVisionBtn = Button(this).apply {
-            text = "1. ЗАПУСТИТЬ ГЛАЗА И ПОДСВЕТКУ ВРАГОВ"
-            setOnClickListener { startVision() }
-        }
-        layout.addView(startVisionBtn)
-
-        val enableHandsBtn = Button(this).apply {
-            text = "2. ВКЛЮЧИТЬ РУКИ БОТА (СПЕЦ. ВОЗМОЖНОСТИ)"
+    override fun onCreate(s: Bundle?) {
+        super.onCreate(s)
+        val lay = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(36, 48, 36, 36) }
+        lay.addView(TextView(this).apply { text = "asd AI v3.0 — Зрение + Память + Руки"; textSize = 19f; setTextColor(Color.CYAN) })
+        lay.addView(Button(this).apply {
+            text = "1. ВКЛЮЧИТЬ ГЛАЗА И ПОДСВЕТКУ ВРАГОВ"
             setOnClickListener {
-                Toast.makeText(this@MainActivity, "Найди asd AI в списке и включи!", Toast.LENGTH_LONG).show()
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                if (!Settings.canDrawOverlays(context)) {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                } else {
+                    val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                    startActivityForResult(mpm.createScreenCaptureIntent(), 101)
+                }
             }
-        }
-        layout.addView(enableHandsBtn)
-
-        val memJson = AsdBrainMemory.load(this)
-        val jsonBox = TextView(this).apply {
-            text = "База знаний (asd_memory.json):\n\n" + memJson.toString(2)
-            textSize = 11f
-            setTextColor(Color.LTGRAY)
-            typeface = Typeface.MONOSPACE
-            setPadding(16, 16, 16, 16)
-            setBackgroundColor(Color.parseColor("#1E1E1E"))
-        }
-        layout.addView(jsonBox)
-
-        scroll.addView(layout)
-        setContentView(scroll)
+        })
+        lay.addView(Button(this).apply {
+            text = "2. ВКЛЮЧИТЬ РУКИ (СПЕЦ. ВОЗМОЖНОСТИ)"
+            setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        })
+        lay.addView(TextView(this).apply {
+            text = AsdMemory.load(context).toString(2)
+            textSize = 11f; setTextColor(Color.LTGRAY); typeface = Typeface.MONOSPACE
+        })
+        setContentView(ScrollView(this).apply { setBackgroundColor(Color.parseColor("#121212")); addView(lay) })
     }
 
-    private fun startVision() {
-        if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "Разреши наложение поверх других окон!", Toast.LENGTH_LONG).show()
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-            return
-        }
-        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE)
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQ_CAPTURE && resultCode == RESULT_OK && data != null) {
-            val intent = Intent(this, OverlayService::class.java).apply {
-                putExtra("resultCode", resultCode)
-                putExtra("data", data)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
-            else startService(intent)
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        if (req == 101 && res == RESULT_OK && data != null) {
+            val i = Intent(this, OverlayService::class.java).putExtra("rc", res).putExtra("data", data)
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
             finish()
         }
     }
@@ -173,348 +88,186 @@ class MainActivity : Activity() {
 
 class OverlayService : Service() {
     private lateinit var wm: WindowManager
-    private lateinit var hudView: BotHudView
-    private lateinit var statusText: TextView
-    private lateinit var controlPanel: LinearLayout
-    private val handler = Handler(Looper.getMainLooper())
+    private lateinit var hud: BotHudView
+    private lateinit var panel: LinearLayout
+    private lateinit var status: TextView
+    private val h = Handler(Looper.getMainLooper())
+    private var mp: MediaProjection? = null
+    private var vd: VirtualDisplay? = null
+    private var ir: ImageReader? = null
+    private var sw = 1920; private var sh = 1080
+    private var auto = false; private var lastDist = 0f; private var stuck = 0; private var ang = 0.0
 
-    private var mediaProjection: MediaProjection? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private var imageReader: ImageReader? = null
-
-    private var screenW = 1920
-    private var screenH = 1080
-    private var autoPlayEnabled = false
-    private var showButtonsOverlay = true
-
-    private var lastEnemyDist = 0f
-    private var stuckCounter = 0
-    private var walkAngle = 0.0
-
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(i: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        hud = BotHudView(this)
+        wm.addView(hud, WindowManager.LayoutParams(-1, -1, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT))
 
-        hudView = BotHudView(this)
-        val hudParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        )
-        wm.addView(hudView, hudParams)
-
-        statusText = TextView(this).apply {
-            text = "asd: Готов"
-            setTextColor(Color.CYAN)
-            textSize = 11f
-            setPadding(10, 0, 10, 0)
+        status = TextView(this).apply { text = "asd: Готов"; setTextColor(Color.CYAN); textSize = 11f; setPadding(8, 0, 8, 0) }
+        panel = LinearLayout(this).apply {
+            setBackgroundColor(Color.argb(210, 20, 20, 20)); setPadding(8, 4, 8, 4)
+            addView(status)
+            addView(Button(context).apply {
+                text = "АВТО: ВЫКЛ"; textSize = 10f
+                setOnClickListener { auto = !auto; text = if (auto) "АВТО: ВКЛ" else "АВТО: ВЫКЛ" }
+            })
+            addView(Button(context).apply {
+                text = "Кнопки"; textSize = 10f
+                setOnClickListener { hud.showZones = !hud.showZones; hud.invalidate() }
+            })
+            addView(Button(context).apply { text = "Х"; textSize = 10f; setTextColor(Color.RED); setOnClickListener { stopSelf() } })
         }
-
-        val autoBtn = Button(this).apply {
-            text = "АВТО: ВЫКЛ"
-            textSize = 10f
-            setOnClickListener {
-                autoPlayEnabled = !autoPlayEnabled
-                text = if (autoPlayEnabled) "АВТО: ВКЛ" else "АВТО: ВЫКЛ"
-            }
-        }
-
-        val btnToggleZones = Button(this).apply {
-            text = "Кнопки"
-            textSize = 10f
-            setOnClickListener {
-                showButtonsOverlay = !showButtonsOverlay
-                hudView.showControls = showButtonsOverlay
-                hudView.invalidate()
-            }
-        }
-
-        val closeBtn = Button(this).apply {
-            text = "Х"
-            textSize = 10f
-            setTextColor(Color.RED)
-            setOnClickListener { stopSelf() }
-        }
-
-        controlPanel = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.argb(215, 20, 20, 20))
-            setPadding(10, 4, 10, 4)
-            addView(statusText)
-            addView(autoBtn)
-            addView(btnToggleZones)
-            addView(closeBtn)
-        }
-
-        val panelParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 50
-            y = 30
-        }
-
-        controlPanel.setOnTouchListener(object : View.OnTouchListener {
-            private var ix = 0; private var iy = 0; private var tx = 0f; private var ty = 0f
-            override fun onTouch(v: View, e: MotionEvent): Boolean {
-                when (e.action) {
-                    MotionEvent.ACTION_DOWN -> { ix = panelParams.x; iy = panelParams.y; tx = e.rawX; ty = e.rawY; return true }
-                    MotionEvent.ACTION_MOVE -> {
-                        panelParams.x = ix + (e.rawX - tx).toInt()
-                        panelParams.y = iy + (e.rawY - ty).toInt()
-                        wm.updateViewLayout(controlPanel, panelParams)
-                        return true
-                    }
-                }
-                return false
-            }
-        })
-        wm.addView(controlPanel, panelParams)
+        val pp = WindowManager.LayoutParams(-2, -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.START; x = 40; y = 30 }
+        wm.addView(panel, pp)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForegroundNotif()
-        val rc = intent?.getIntExtra("resultCode", Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
-        val data = intent?.getParcelableExtra<Intent>("data")
+    override fun onStartCommand(i: Intent?, flags: Int, id: Int): Int {
+        val ch = "asd_ch"
+        if (Build.VERSION.SDK_INT >= 26) (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(NotificationChannel(ch, "asd", NotificationManager.IMPORTANCE_LOW))
+        val n = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, ch).setContentTitle("asd AI").setSmallIcon(android.R.drawable.ic_menu_view).build() else Notification.Builder(this).build()
+        if (Build.VERSION.SDK_INT >= 29) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION) else startForeground(1, n)
+
+        val rc = i?.getIntExtra("rc", 0) ?: 0
+        val data = i?.getParcelableExtra<Intent>("data")
         if (rc == Activity.RESULT_OK && data != null) {
-            setupCapture(rc, data)
-            handler.post(loopRunnable)
+            val dm = DisplayMetrics()
+            @Suppress("DEPRECATION") wm.defaultDisplay.getRealMetrics(dm)
+            sw = dm.widthPixels; sh = dm.heightPixels
+            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mp = mpm.getMediaProjection(rc, data)
+            mp?.registerCallback(object : MediaProjection.Callback() { override fun onStop() { stopSelf() } }, h)
+            ir = ImageReader.newInstance(sw / 4, sh / 4, PixelFormat.RGBA_8888, 2)
+            vd = mp?.createVirtualDisplay("asd", sw / 4, sh / 4, dm.densityDpi, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, ir?.surface, null, h)
+            h.post(loop)
         }
         return START_NOT_STICKY
     }
 
-    private fun startForegroundNotif() {
-        val chId = "asd_v3"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(chId, "asd AI", NotificationManager.IMPORTANCE_LOW)
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(ch)
-        }
-        val n = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, chId).setContentTitle("asd AI v3.0").setSmallIcon(android.R.drawable.ic_menu_view).build()
-        } else Notification.Builder(this).setContentTitle("asd AI").build()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else startForeground(1, n)
-    }
-
-    private fun setupCapture(resultCode: Int, data: Intent) {
-        val m = DisplayMetrics()
-        @Suppress("DEPRECATION")
-        wm.defaultDisplay.getRealMetrics(m)
-        screenW = m.widthPixels
-        screenH = m.heightPixels
-
-        val capW = (screenW / 4).coerceAtLeast(100)
-        val capH = (screenH / 4).coerceAtLeast(100)
-
-        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = mpm.getMediaProjection(resultCode, data)
-        mediaProjection?.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() { stopSelf() }
-        }, handler)
-
-        imageReader = ImageReader.newInstance(capW, capH, PixelFormat.RGBA_8888, 2)
-        virtualDisplay = mediaProjection?.createVirtualDisplay(
-            "AsdV3", capW, capH, m.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader?.surface, null, handler
-        )
-    }
-
-    private val loopRunnable = object : Runnable {
+    private val loop = object : Runnable {
         override fun run() {
-            processFrameAndThink()
-            handler.postDelayed(this, 190L)
+            scanFrame()
+            h.postDelayed(this, 190L)
         }
     }
 
-    private fun processFrameAndThink() {
-        val m = DisplayMetrics()
-        @Suppress("DEPRECATION")
-        wm.defaultDisplay.getRealMetrics(m)
-        screenW = m.widthPixels
-        screenH = m.heightPixels
-
-        val img = imageReader?.acquireLatestImage() ?: return
+    private fun scanFrame() {
+        val dm = DisplayMetrics()
+        @Suppress("DEPRECATION") wm.defaultDisplay.getRealMetrics(dm)
+        sw = dm.widthPixels; sh = dm.heightPixels
+        val img = ir?.acquireLatestImage() ?: return
         try {
-            val plane = img.planes[0]
-            val buf = plane.buffer
-            val pStride = plane.pixelStride
-            val rStride = plane.rowStride
-            val iw = img.width
-            val ih = img.height
-
-            val rawEnemies = mutableListOf<PointF>()
-            val rawMe = mutableListOf<PointF>()
-            val sx = screenW.toFloat() / iw
-            val sy = screenH.toFloat() / ih
+            val pl = img.planes[0]; val buf = pl.buffer; val ps = pl.pixelStride; val rs = pl.rowStride
+            val iw = img.width; val ih = img.height
+            val sx = sw.toFloat() / iw; val sy = sh.toFloat() / ih
+            val rawE = mutableListOf<PointF>(); val rawM = mutableListOf<PointF>()
 
             for (y in (ih * 0.14f).toInt() until (ih * 0.84f).toInt() step 2) {
                 for (x in (iw * 0.12f).toInt() until (iw * 0.88f).toInt() step 2) {
                     if (x > iw * 0.62f && y > ih * 0.55f) continue
                     if (x < iw * 0.30f && y > ih * 0.55f) continue
-
-                    val off = y * rStride + x * pStride
+                    val off = y * rs + x * ps
                     if (off + 2 >= buf.limit()) continue
                     val r = buf.get(off).toInt() and 0xFF
                     val g = buf.get(off + 1).toInt() and 0xFF
                     val b = buf.get(off + 2).toInt() and 0xFF
-
-                    if (r > 215 && g in 15..68 && b in 20..78) {
-                        rawEnemies.add(PointF(x * sx, y * sy + 60f))
-                    } else if (g > 210 && r in 15..85 && b in 20..95) {
-                        if (x in (iw * 0.32f).toInt()..(iw * 0.68f).toInt()) {
-                            rawMe.add(PointF(x * sx, y * sy + 60f))
-                        }
-                    }
+                    if (r > 215 && g in 15..68 && b in 20..78) rawE.add(PointF(x * sx, y * sy + 60f))
+                    else if (g > 210 && r in 15..85 && b in 20..95 && x in (iw * 0.32f).toInt()..(iw * 0.68f).toInt()) rawM.add(PointF(x * sx, y * sy + 60f))
                 }
             }
+            val en = cluster(rawE); val meL = cluster(rawM)
+            val me = if (meL.isNotEmpty()) meL[0] else PointF(sw / 2f, sh / 2f)
+            val near = en.minByOrNull { hypot(it.x - me.x, it.y - me.y) }
+            val d = near?.let { hypot(it.x - me.x, it.y - me.y) } ?: 9999f
 
-            val enemies = cluster(rawEnemies, 160f)
-            val meCluster = cluster(rawMe, 160f)
-            val myPos = if (meCluster.isNotEmpty()) meCluster[0] else PointF(screenW / 2f, screenH / 2f)
-
-            val nearestEnemy = enemies.minByOrNull { hypot(it.x - myPos.x, it.y - myPos.y) }
-            val dist = nearestEnemy?.let { hypot(it.x - myPos.x, it.y - myPos.y) } ?: 9999f
-
-            val thought = when {
-                nearestEnemy == null -> "Мысль: Чисто. Проверяю кусты ? (50/50), Гипер бережем!"
-                dist < 185f -> "КРАЙНИЙ СЛУЧАЙ (${dist.toInt()}px)! ГИПЕР + УЛЬТА + АВТОАТАКА!"
-                dist < 310f -> "ОПАСНОСТЬ (${dist.toInt()}px): Враг в зоне Ульты! Держу дистанцию!"
-                else -> "Вижу врага (${dist.toInt()}px): Автоатака запрещена (далеко), мансую!"
+            val msg = when {
+                near == null -> "Мысль: Чисто. Ищу кусты ? (50/50), Гипер бережем!"
+                d < 185f -> "КРАЙНИЙ СЛУЧАЙ (${d.toInt()}px)! ГИПЕР + УЛЬТА + АВТОАТАКА!"
+                d < 310f -> "ОПАСНОСТЬ (${d.toInt()}px): Зона Ульты! Держу дистанцию!"
+                else -> "Враг (${d.toInt()}px): Автоатака запрещена (далеко), мансую!"
             }
-
-            statusText.text = "Врагов: ${enemies.size}"
-            hudView.updateState(myPos, enemies, thought)
-
-            if (enemies.isNotEmpty()) AsdBrainMemory.updateLearning(this, enemies.size, false)
+            status.text = "Врагов: ${en.size}"
+            hud.update(me, en, msg)
 
             val hands = BotControlService.instance
-            if (autoPlayEnabled && hands != null) {
-                val moveX = screenW * 0.16f
-                val moveY = screenH * 0.74f
-                val atkX = screenW * 0.83f
-                val atkY = screenH * 0.70f
-                val superX = screenW * 0.70f
-                val superY = screenH * 0.64f
-                val hyperX = screenW * 0.61f
-                val hyperY = screenH * 0.82f
-
-                if (kotlin.math.abs(dist - lastEnemyDist) < 6f) stuckCounter++ else stuckCounter = 0
-                lastEnemyDist = dist
-
-                if (stuckCounter >= 4) {
-                    hudView.updateState(myPos, enemies, "ЗАСТРЯЛ! Делаю 3 удара и обхожу стену!")
-                    hands.tapButton(atkX, atkY, 50L)
-                    walkAngle += 1.57
-                    stuckCounter = 0
-                    AsdBrainMemory.updateLearning(this, 0, true)
-                } else if (nearestEnemy != null && dist < 185f) {
-                    hands.tapButton(hyperX, hyperY, 45L)
-                    hands.tapButton(superX, superY, 45L)
-                    hands.tapButton(atkX, atkY, 50L)
-                } else if (nearestEnemy != null && dist < 290f) {
-                    val dx = myPos.x - nearestEnemy.x
-                    val dy = myPos.y - nearestEnemy.y
-                    val len = hypot(dx, dy).coerceAtLeast(1f)
-                    hands.holdJoystick(moveX, moveY, moveX + (dx / len) * 110f, moveY + (dy / len) * 110f, 170L)
+            if (auto && hands != null) {
+                val mx = sw * 0.16f; val my = sh * 0.74f; val ax = sw * 0.83f; val ay = sh * 0.70f
+                if (abs(d - lastDist) < 6f) stuck++ else stuck = 0
+                lastDist = d
+                if (stuck >= 4) {
+                    hud.update(me, en, "ЗАСТРЯЛ В СТЕНЕ! 3 удара и обход!")
+                    hands.tap(ax, ay); ang += 1.57; stuck = 0
+                } else if (near != null && d < 185f) {
+                    hands.tap(sw * 0.61f, sh * 0.82f); hands.tap(sw * 0.70f, sh * 0.64f); hands.tap(ax, ay)
                 } else {
-                    val tx = moveX + (cos(walkAngle) * 110f).toFloat()
-                    val ty = moveY + (sin(walkAngle) * 110f).toFloat()
-                    hands.holdJoystick(moveX, moveY, tx, ty, 170L)
+                    hands.move(mx, my, mx + (cos(ang) * 110f).toFloat(), my + (sin(ang) * 110f).toFloat())
                 }
             }
-        } catch (_: Exception) {
-        } finally {
-            img.close()
-        }
+        } catch (_: Exception) {} finally { img.close() }
     }
 
-    private fun cluster(pts: List<PointF>, rad: Float): List<PointF> {
+    private fun cluster(pts: List<PointF>): List<PointF> {
         val res = mutableListOf<PointF>()
         for (p in pts) {
-            val ex = res.find { hypot(it.x - p.x, it.y - p.y) < rad }
-            if (ex == null) res.add(PointF(p.x, p.y))
-            else { ex.x = (ex.x + p.x) / 2f; ex.y = (ex.y + p.y) / 2f }
+            val ex = res.find { hypot(it.x - p.x, it.y - p.y) < 160f }
+            if (ex == null) res.add(PointF(p.x, p.y)) else { ex.x = (ex.x + p.x) / 2f; ex.y = (ex.y + p.y) / 2f }
         }
         return res
     }
 
     override fun onDestroy() {
-        handler.removeCallbacksAndMessages(null)
-        virtualDisplay?.release()
-        imageReader?.close()
-        mediaProjection?.stop()
-        if (::hudView.isInitialized) wm.removeView(hudView)
-        if (::controlPanel.isInitialized) wm.removeView(controlPanel)
+        h.removeCallbacksAndMessages(null); vd?.release(); ir?.close(); mp?.stop()
+        if (::hud.isInitialized) wm.removeView(hud)
+        if (::panel.isInitialized) wm.removeView(panel)
         super.onDestroy()
     }
 }
 
-class BotHudView(context: Context) : View(context) {
-    private var myPos = PointF(0f, 0f)
-    private var enemies = listOf<PointF>()
-    private var currentThought = "Мысль asd: Анализирую..."
-    var showControls = true
+class BotHudView(ctx: Context) : View(ctx) {
+    private var me = PointF(0f, 0f); private var enemies = listOf<PointF>()
+    private var thought = "Мысль asd: Готов"; var showZones = true
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 24f; typeface = Typeface.DEFAULT_BOLD }
 
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = 24f
-        typeface = Typeface.DEFAULT_BOLD
-    }
+    fun update(m: PointF, e: List<PointF>, t: String) { me = m; enemies = e; thought = t; invalidate() }
 
-    fun updateState(me: PointF, en: List<PointF>, thought: String) {
-        myPos = me
-        enemies = en
-        currentThought = thought
-        invalidate()
-    }
+    override fun onDraw(c: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat()
+        val mx = if (me.x > 0f) me.x else w / 2f; val my = if (me.y > 0f) me.y else h / 2f
 
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        val w = width.toFloat()
-        val h = height.toFloat()
-        val meX = if (myPos.x > 0f) myPos.x else w / 2f
-        val meY = if (myPos.y > 0f) myPos.y else h / 2f
+        p.style = Paint.Style.FILL; p.color = Color.argb(170, 0, 0, 0)
+        c.drawRoundRect(w * 0.22f, 20f, w * 0.90f, 75f, 14f, 14f, p)
+        tp.color = Color.YELLOW; c.drawText(thought, w * 0.24f, 56f, tp)
 
-        paint.style = Paint.Style.FILL
-        paint.color = Color.argb(170, 0, 0, 0)
-        canvas.drawRoundRect(w * 0.22f, 20f, w * 0.88f, 75f, 14f, 14f, paint)
-        textPaint.color = Color.YELLOW
-        canvas.drawText(currentThought, w * 0.24f, 56f, textPaint)
-
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 5f
-        paint.color = Color.GREEN
-        canvas.drawRect(meX - 50f, meY - 50f, meX + 50f, meY + 50f, paint)
-        canvas.drawCircle(meX, meY, 175f, paint)
-        textPaint.color = Color.GREEN
-        canvas.drawText("Я (ASD)", meX - 45f, meY - 60f, textPaint)
+        p.style = Paint.Style.STROKE; p.strokeWidth = 5f; p.color = Color.GREEN
+        c.drawRect(mx - 50f, my - 50f, mx + 50f, my + 50f, p); c.drawCircle(mx, my, 175f, p)
+        tp.color = Color.GREEN; c.drawText("Я (ASD)", mx - 45f, my - 60f, tp)
 
         for ((i, en) in enemies.withIndex()) {
-            paint.style = Paint.Style.FILL
-            paint.color = Color.argb(55, 0, 220, 255)
-            canvas.drawRect(en.x - 55f, en.y - 55f, en.x + 55f, en.y + 55f, paint)
+            p.style = Paint.Style.FILL; p.color = Color.argb(55, 0, 220, 255)
+            c.drawRect(en.x - 55f, en.y - 55f, en.x + 55f, en.y + 55f, p)
+            p.style = Paint.Style.STROKE; p.strokeWidth = 5f; p.color = Color.CYAN
+            c.drawRect(en.x - 55f, en.y - 55f, en.x + 55f, en.y + 55f, p); c.drawCircle(en.x, en.y, 220f, p)
+            p.color = Color.RED; c.drawCircle(en.x, en.y, 310f, p)
+            c.drawLine(mx, my, en.x, en.y, p)
+            tp.color = Color.CYAN; c.drawText("ВРАГ #${i + 1}", en.x - 55f, en.y - 68f, tp)
+        }
 
-            paint.style = Paint.Style.STROKE
-            paint.strokeWidth = 5f
-            paint.color = Color.CYAN
-            canvas.drawRect(en.x - 55f, en.y - 55f, en.x + 55f, en.y + 55f, paint)
-            canvas.drawCircle(en.x, en.y, 220f, paint)
+        if (showZones) {
+            zone(c, w * 0.16f, h * 0.74f, 90f, Color.GREEN, "ХОДЬБА")
+            zone(c, w * 0.83f, h * 0.70f, 85f, Color.RED, "АВТОАТАКА")
+            zone(c, w * 0.70f, h * 0.64f, 52f, Color.YELLOW, "УЛЬТА")
+            zone(c, w * 0.76f, h * 0.87f, 42f, Color.GREEN, "ГАДЖЕТ")
+            zone(c, w * 0.61f, h * 0.82f, 45f, Color.MAGENTA, "ГИПЕР")
+        }
+    }
 
-            paint.color = Color.argb(200, 255, 50, 50)
-            canvas.drawCircle(en.x, en.y, 310f, paint)
-
-            v
+    private fun zone(c: Canvas, x: Float, y: Float, r: Float, col: Int, txt: String) {
+        p.style = Paint.Style.STROKE; p.strokeWidth = 3f; p.color = col
+        c.drawCircle(x, y, r, p); tp.color = col; c.drawText(txt, x - r, y - r - 8f, tp)
+    }
+}
+// КОНЕЦ
